@@ -3,94 +3,48 @@
 
 # 基础库
 # --------------------------
-import os             
-import pandas as pd   
-import matplotlib.pyplot as plt  
+import os
+import pandas as pd
+import matplotlib.pyplot as plt
 import shap
 import numpy as np
 # -------------------------
-from xgboost import XGBRegressor, plot_importance
+from xgboost import plot_importance
 
 # --------------------------
 
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import mean_squared_error
+from forecasting import FEATURE_COLUMNS, prepare_forecast_data, rolling_forecast
 
 # --------------------------
 cssd = pd.read_csv('C:\\Users\\megamind\\Desktop\\crash_a.csv', parse_dates=['Trddt'])
 
 
 # --------------------------
-#  排序（保证时间顺序）
+# 按原始交易日期对齐目标，再构造滞后和滚动平均特征。
 # --------------------------
-cssd = cssd.sort_values('Trddt').reset_index(drop=True)
-
-# --------------------------
-# 4. 构造滞后特征（Lags）
-# --------------------------
-# 这里构造 CSSD1 的1天、2天、5天滞后
-cssd['CSSD1_lag1'] = cssd['CSSD1'].shift(1)
-cssd['CSSD1_lag2'] = cssd['CSSD1'].shift(2)
-cssd['CSSD1_lag5'] = cssd['CSSD1'].shift(5)
-
-# 构造简单的滚动平均作为特征
-cssd['CSSD1_ma5'] = cssd['CSSD1'].rolling(5).mean()
-cssd['CSSD1_ma10'] = cssd['CSSD1'].rolling(10).mean()
-
-# --------------------------
-# 删除含NaN的行（滞后期开头会产生NaN）
-# --------------------------
-cssd = cssd.dropna().reset_index(drop=True)
+cssd = prepare_forecast_data(cssd)
 
 # --------------------------
 # 6. 特征和目标
 # --------------------------
 # 特征选择: 滞后期 + 移动平均
-feature_cols = ['CSSD1', 'CSSD1_lag1', 'CSSD1_lag2', 'CSSD1_lag5', 'CSSD1_ma5', 'CSSD1_ma10']
+feature_cols = FEATURE_COLUMNS
 X = cssd[feature_cols]
-
-# 预测目标: 下一个交易日的市场回报
-y = cssd['Dretwdeq'].shift(-1)  # 向前滚动一位预测下一天
-cssd = cssd.iloc[:-1]  # 删除最后一行的NaN
-X = X.iloc[:-1]
-y = y.iloc[:-1]
 
 # --------------------------
 # 4. 滚动预测设置
 # --------------------------
 window_size = 240     # 滚动训练窗口长度
-preds = []
-feat_importances = pd.DataFrame(columns=feature_cols)
-
-for start in range(len(cssd) - window_size):
-    end = start + window_size
-    X_train = X.iloc[start:end]
-    y_train = y.iloc[start:end]
-    X_test = X.iloc[end:end+1]
-    y_test = y.iloc[end:end+1]
-
-    model = XGBRegressor(
-        n_estimators=100,
-        learning_rate=0.1,
-        max_depth=3,
-        random_state=42
-    )
-    model.fit(X_train, y_train)
-    pred = model.predict(X_test)[0]
-    preds.append(pred)
-
-    # 记录特征重要性
-    imp = model.feature_importances_
-    feat_importances.loc[end] = imp
+forecast_output, model, feat_importances = rolling_forecast(cssd, window_size)
+preds = forecast_output['Return_pred'].to_numpy()
 
 # --------------------------
 # 5. 输出预测值
 # --------------------------
-cssd = cssd.iloc[window_size:].copy()
-cssd['Dretwdeq'] = preds
+cssd = forecast_output  # 保留 Dretwdeq；另存目标日期、真实目标值和预测值
 
 cssd.to_csv("C:\\Users\\megamind\\Desktop\\3cssd_prediction.csv", index=False)
-print("滚动预测完成，文件已保存为 cssd_prediction.csv")
+print("滚动预测完成，文件已保存为 3cssd_prediction.csv")
 
 
 
@@ -130,7 +84,7 @@ plt.close()
 # --------------------------
 # 3. 残差可视化
 # --------------------------
-y_true = y.iloc[window_size:].values
+y_true = cssd['Return_next'].to_numpy()
 y_pred = preds
 residuals = y_true - y_pred
 
