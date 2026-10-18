@@ -117,6 +117,26 @@ class ForecastTests(unittest.TestCase):
         self.assertTrue(np.isfinite(output.Return_pred.iloc[0]))
         self.assertEqual(output.Target_date.iloc[0], sample_data(23).Trddt.iloc[-1])
 
+    def test_training_labels_are_known_at_forecast_time_even_with_gaps(self):
+        source = sample_data(50)
+        source.loc[25, "CSSD1"] = np.nan
+        prepared = prepare_forecast_data(source)
+        case = self
+
+        class AvailabilityModel:
+            feature_importances_ = np.ones(len(FEATURE_COLUMNS)) / len(FEATURE_COLUMNS)
+
+            def fit(self, x, y):
+                self.label_dates = prepared.loc[y.index, "Target_date"]
+
+            def predict(self, x):
+                forecast_time = prepared.loc[x.index[0], "Trddt"]
+                case.assertTrue((self.label_dates <= forecast_time).all())
+                return [0.0]
+
+        output, _, _ = rolling_forecast(prepared, 8, AvailabilityModel)
+        self.assertGreater(len(output), 1)
+
     def test_nonfinite_predictions_are_rejected(self):
         class InvalidModel:
             def fit(self, x, y):
